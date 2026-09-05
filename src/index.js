@@ -300,10 +300,11 @@ async function postDraftsCheck(channelId, { ccManager = false } = {}) {
 
 async function postPaymentCheck(channelId, { ccManager = false } = {}) {
   const open = await getOpenInvoices();
+  const due = open.filter((r) => r.daysPastDue !== null && r.daysPastDue >= 0);
   const result = await slack.chat.postMessage({
     channel: channelId,
     text: 'AR: payments to chase',
-    blocks: formatPaymentNudgeBlocks(open, {
+    blocks: formatPaymentNudgeBlocks(due, {
       csmUserId: AR_CSM_USER_ID,
       escalationDays: Number(AR_OVERDUE_ESCALATION_DAYS),
     }),
@@ -312,7 +313,7 @@ async function postPaymentCheck(channelId, { ccManager = false } = {}) {
     try {
       await slack.chat.postMessage({
         channel: AR_MANAGER_ID,
-        text: `📣 AR payments nudge posted in <#${channelId}> — ${open.length} open invoice${open.length === 1 ? '' : 's'} to chase`,
+        text: `📣 AR payments nudge posted in <#${channelId}> — ${due.length} invoice${due.length === 1 ? '' : 's'} past due`,
       });
     } catch (err) {
       console.error('cc manager (payments) failed:', err.message);
