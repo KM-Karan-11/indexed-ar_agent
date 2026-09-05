@@ -3,6 +3,13 @@ import bolt from '@slack/bolt';
 import { WebClient } from '@slack/web-api';
 import { google } from 'googleapis';
 import { Readable } from 'node:stream';
+import {
+  currentInvoiceMonth,
+  getDraftsForMonth,
+  markRaised,
+  formatDraftBlocks,
+  raisedModal,
+} from './ar.js';
 
 const { App, ExpressReceiver } = bolt;
 
@@ -187,6 +194,83 @@ boltApp.message(async ({ event, context }) => {
   } catch (err) {
     console.error('upload error:', err);
     await reply(`Something broke: ${err.message}`);
+  }
+});
+
+// ─── AR agent: /ar-check ───────────────────────────────────────────
+boltApp.command('/ar-check', async ({ ack, respond, command }) => {
+  await ack();
+  try {
+    const month = currentInvoiceMonth();
+    const drafts = await getDraftsForMonth(month);
+    const blocks = formatDraftBlocks(drafts, month);
+    await slack.chat.postMessage({
+      channel: command.channel_id,
+      text: `AR drafts for ${month}`,
+      blocks,
+    });
+  } catch (err) {
+    console.error('ar-check error:', err);
+    await respond({ response_type: 'ephemeral', text: `AR check failed: ${err.message}` });
+  }
+});
+
+// Button click → open modal
+boltApp.action('ar_mark_raised', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const rowId = body.actions[0].value;
+    const drafts = await getDraftsForMonth(currentInvoiceMonth());
+    const target = drafts.find((d) => String(d.id) === String(rowId));
+    if (!target) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: 'That invoice was already updated or is no longer a draft.',
+      });
+      return;
+    }
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: raisedModal(rowId, target.client, target.invoiceMonth),
+    });
+  } catch (err) {
+    console.error('ar_mark_raised error:', err);
+    await client.chat.postEphemeral({
+      channel: body.channel.id,
+      user: body.user.id,
+      text: `Couldn't open the form: ${err.message}`,
+    });
+  }
+});
+
+// Modal submit → write back to Supabase
+boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
+  const { rowId } = JSON.parse(view.private_metadata || '{}');
+  const invoiceNo = view.state.values.invoice_no?.value?.value?.trim();
+  const invoiceDate = view.state.values.invoice_date?.value?.selected_date;
+
+  if (!invoiceNo) {
+    await ack({
+      response_action: 'errors',
+      errors: { invoice_no: 'Invoice # is required' },
+    });
+    return;
+  }
+
+  await ack();
+  try {
+    const updated = await markRaised(rowId, invoiceNo, invoiceDate, body.user.username);
+    await client.chat.postMessage({
+      channel: body.user.id,
+      text: `✅ Marked *${updated.client}* invoice as raised: \`${invoiceNo}\` (${invoiceDate || 'today'}).`,
+    });
+  } catch (err) {
+    console.error('ar_raised_submit error:', err);
+    await client.chat.postMessage({
+      channel: body.user.id,
+      text: `❌ Couldn't save to FP&A: ${err.message}`,
+    });
   }
 });
 
