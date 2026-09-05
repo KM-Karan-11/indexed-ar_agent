@@ -198,7 +198,7 @@ boltApp.message(async ({ event, context }) => {
 });
 
 // ─── AR agent: /ar-check ───────────────────────────────────────────
-boltApp.command('/ar-check', async ({ ack, respond, command }) => {
+boltApp.command('/invoice-check', async ({ ack, respond, command }) => {
   await ack();
   try {
     const month = currentInvoiceMonth();
