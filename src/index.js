@@ -88,21 +88,17 @@ async function markListRowDone(client, channelId, messageTs, rowId, doneEmoji) {
   }
 }
 
-async function dmActorAndManager(client, actorId, text) {
-  try {
-    const r = await client.chat.postMessage({ channel: actorId, text });
-    console.log(`[dm] actor=${actorId} ok=${r.ok} channel=${r.channel}`);
-  } catch (err) {
-    console.error('dm actor failed:', actorId, err.message);
-  }
-  if (AR_MANAGER_ID) {
-    try {
-      const r = await client.chat.postMessage({ channel: AR_MANAGER_ID, text });
-      console.log(`[dm] manager=${AR_MANAGER_ID} ok=${r.ok} channel=${r.channel}`);
-    } catch (err) {
-      console.error('cc manager failed:', AR_MANAGER_ID, err.message);
-    }
-  }
+function withCc(text) {
+  if (!AR_MANAGER_ID) return text;
+  return `${text}\n\ncc: <@${AR_MANAGER_ID}>`;
+}
+
+function ccContextBlock() {
+  if (!AR_MANAGER_ID) return null;
+  return {
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text: `cc: <@${AR_MANAGER_ID}>` }],
+  };
 }
 
 const useSocketMode = Boolean(SLACK_APP_TOKEN);
@@ -279,56 +275,40 @@ boltApp.message(async ({ event, context }) => {
 });
 
 // ─── AR agent ──────────────────────────────────────────────────────
-async function postDraftsCheck(channelId, { ccManager = false } = {}) {
+async function postDraftsCheck(channelId) {
   const month = currentInvoiceMonth();
   const drafts = await getDraftsForMonth(month);
-  const result = await slack.chat.postMessage({
+  const blocks = formatDraftBlocks(drafts, month);
+  const cc = ccContextBlock();
+  if (cc) blocks.push(cc);
+  return slack.chat.postMessage({
     channel: channelId,
     text: `AR drafts for ${month}`,
-    blocks: formatDraftBlocks(drafts, month),
+    blocks,
   });
-  if (ccManager && AR_MANAGER_ID) {
-    try {
-      await slack.chat.postMessage({
-        channel: AR_MANAGER_ID,
-        text: `📣 AR drafts nudge posted in <#${channelId}> — ${drafts.length} draft${drafts.length === 1 ? '' : 's'} for ${month}`,
-      });
-    } catch (err) {
-      console.error('cc manager (drafts) failed:', err.message);
-    }
-  }
-  return result;
 }
 
-async function postPaymentCheck(channelId, { ccManager = false } = {}) {
+async function postPaymentCheck(channelId) {
   const open = await getOpenInvoices();
   const due = open.filter((r) => r.daysPastDue !== null && r.daysPastDue >= 0);
-  const result = await slack.chat.postMessage({
+  const blocks = formatPaymentNudgeBlocks(due, {
+    csmUserId: AR_CSM_USER_ID,
+    escalationDays: Number(AR_OVERDUE_ESCALATION_DAYS),
+  });
+  const cc = ccContextBlock();
+  if (cc) blocks.push(cc);
+  return slack.chat.postMessage({
     channel: channelId,
     text: 'AR: payments to chase',
-    blocks: formatPaymentNudgeBlocks(due, {
-      csmUserId: AR_CSM_USER_ID,
-      escalationDays: Number(AR_OVERDUE_ESCALATION_DAYS),
-    }),
+    blocks,
   });
-  if (ccManager && AR_MANAGER_ID) {
-    try {
-      await slack.chat.postMessage({
-        channel: AR_MANAGER_ID,
-        text: `📣 AR payments nudge posted in <#${channelId}> — ${due.length} invoice${due.length === 1 ? '' : 's'} past due`,
-      });
-    } catch (err) {
-      console.error('cc manager (payments) failed:', err.message);
-    }
-  }
-  return result;
 }
 
 boltApp.command('/invoice-check', async ({ ack, respond, command }) => {
   await ack();
   console.log(`[cmd] /invoice-check by ${command.user_id} in ${command.channel_id}`);
   try {
-    await postDraftsCheck(command.channel_id, { ccManager: true });
+    await postDraftsCheck(command.channel_id);
   } catch (err) {
     console.error('invoice-check error:', err);
     await respond({ response_type: 'ephemeral', text: `Invoice check failed: ${err.message}` });
@@ -339,7 +319,7 @@ boltApp.command('/payment-check', async ({ ack, respond, command }) => {
   await ack();
   console.log(`[cmd] /payment-check by ${command.user_id} in ${command.channel_id}`);
   try {
-    await postPaymentCheck(command.channel_id, { ccManager: true });
+    await postPaymentCheck(command.channel_id);
   } catch (err) {
     console.error('payment-check error:', err);
     await respond({ response_type: 'ephemeral', text: `Payment check failed: ${err.message}` });
@@ -406,7 +386,7 @@ boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
     const updated = await markRaised(rowId, invoiceNo, invoiceDate, body.user.username);
     const msg = `✅ *${updated.client}* marked raised: \`${invoiceNo}\` (${invoiceDate || 'today'}) — by <@${body.user.id}>`;
     if (channelId && messageTs) {
-      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
+      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: withCc(msg) });
       await markListRowDone(client, channelId, messageTs, rowId, '✅');
     }
   } catch (err) {
@@ -475,7 +455,7 @@ boltApp.view('ar_paid_submit', async ({ ack, body, view, client }) => {
     const updated = await markPaid(rowId, paymentDate, body.user.username);
     const msg = `💰 *${updated.client}* paid on ${paymentDate} — \`${updated.invoiceNo}\` closed by <@${body.user.id}>`;
     if (channelId && messageTs) {
-      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
+      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: withCc(msg) });
       await markListRowDone(client, channelId, messageTs, rowId, '💰');
     }
   } catch (err) {
@@ -544,7 +524,7 @@ boltApp.view('ar_due_submit', async ({ ack, body, view, client }) => {
     const updated = await updateDueDate(rowId, newDueDate, body.user.username);
     const msg = `📅 *${updated.client}* · \`${updated.invoiceNo}\` — due date moved ${updated.previousDueDate || '—'} → ${newDueDate} by <@${body.user.id}>. Bot will resume chasing after that date.`;
     if (channelId && messageTs) {
-      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
+      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: withCc(msg) });
     }
   } catch (err) {
     console.error('ar_due_submit error:', err);
@@ -561,8 +541,8 @@ if (AR_ENABLE_CRON === 'true' && AR_CRON_CHANNEL_ID) {
     async () => {
       try {
         console.log('[cron] 1st-of-month AR post');
-        await postDraftsCheck(AR_CRON_CHANNEL_ID, { ccManager: true });
-        await postPaymentCheck(AR_CRON_CHANNEL_ID, { ccManager: true });
+        await postDraftsCheck(AR_CRON_CHANNEL_ID);
+        await postPaymentCheck(AR_CRON_CHANNEL_ID);
       } catch (err) {
         console.error('cron 1st-of-month error:', err);
       }
@@ -575,8 +555,8 @@ if (AR_ENABLE_CRON === 'true' && AR_CRON_CHANNEL_ID) {
     async () => {
       try {
         console.log('[cron] Monday AR sweep');
-        await postDraftsCheck(AR_CRON_CHANNEL_ID, { ccManager: true });
-        await postPaymentCheck(AR_CRON_CHANNEL_ID, { ccManager: true });
+        await postDraftsCheck(AR_CRON_CHANNEL_ID);
+        await postPaymentCheck(AR_CRON_CHANNEL_ID);
       } catch (err) {
         console.error('cron Monday error:', err);
       }
