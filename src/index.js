@@ -21,8 +21,15 @@ const {
   GOOGLE_CLIENT_SECRET,
   GOOGLE_REFRESH_TOKEN,
   DRIVE_PARENT_FOLDER_ID,
+  AR_AUTHORIZED_USERS = '',
   PORT = 3000,
 } = process.env;
+
+const arAllowlist = AR_AUTHORIZED_USERS.split(',').map((s) => s.trim()).filter(Boolean);
+function isArAuthorized(userId) {
+  if (arAllowlist.length === 0) return true;
+  return arAllowlist.includes(userId);
+}
 
 const useSocketMode = Boolean(SLACK_APP_TOKEN);
 
@@ -219,6 +226,14 @@ boltApp.command('/invoice-check', async ({ ack, respond, command }) => {
 boltApp.action('ar_mark_raised', async ({ ack, body, client }) => {
   await ack();
   try {
+    if (!isArAuthorized(body.user.id)) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: '🔒 Only the accountant or their manager can mark invoices as raised.',
+      });
+      return;
+    }
     const rowId = body.actions[0].value;
     const drafts = await getDraftsForMonth(currentInvoiceMonth());
     const target = drafts.find((d) => String(d.id) === String(rowId));
@@ -246,6 +261,14 @@ boltApp.action('ar_mark_raised', async ({ ack, body, client }) => {
 
 // Modal submit → write back to Supabase
 boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
+  if (!isArAuthorized(body.user.id)) {
+    await ack({
+      response_action: 'errors',
+      errors: { invoice_no: 'You are not authorized to mark invoices as raised.' },
+    });
+    return;
+  }
+
   const { rowId } = JSON.parse(view.private_metadata || '{}');
   const invoiceNo = view.state.values.invoice_no?.value?.value?.trim();
   const invoiceDate = view.state.values.invoice_date?.value?.selected_date;
