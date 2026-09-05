@@ -38,13 +38,25 @@ export async function getDraftsForMonth(month) {
   );
 }
 
-// All invoices that have been raised but not yet paid, sorted by most-overdue first.
+// FP&A pre-fills paymentDate = invoiceDate as an optimistic placeholder for every
+// row (not a real payment record). We treat that as "unpaid" unless status is
+// explicitly 'Paid' or paymentDate differs from invoiceDate (i.e., someone recorded
+// a real payment date). This is a workaround until the FP&A tool changes that
+// behavior or we sync from Xero directly.
+export function isOpen(r) {
+  if (!r.invoiceNo) return false;
+  if (r.status === 'Paid') return false;
+  if (!r.paymentDate) return true;
+  return r.paymentDate === r.invoiceDate;
+}
+
+// All open (raised, not truly paid) invoices, sorted by most-overdue first.
 // Optional `since` filter (ISO date) narrows to invoices raised on/after that date.
 export async function getOpenInvoices({ since, now = new Date() } = {}) {
   const row = await fetchForecastRow();
   const sinceDate = since ? new Date(since) : null;
   return (row.ar_fcst || [])
-    .filter((r) => r.invoiceNo && !r.paymentDate)
+    .filter(isOpen)
     .filter((r) => {
       if (!sinceDate) return true;
       const inv = r.invoiceDate ? new Date(r.invoiceDate) : null;
@@ -62,7 +74,13 @@ export async function markRaised(rowId, invoiceNo, invoiceDate, actorEmail) {
 
   const updated = ar.map((r) =>
     String(r.id) === String(rowId)
-      ? { ...r, invoiceNo, invoiceDate: invoiceDate || r.invoiceDate, status: 'Invoiced' }
+      ? {
+          ...r,
+          invoiceNo,
+          invoiceDate: invoiceDate || r.invoiceDate,
+          paymentDate: '',
+          status: 'Invoiced',
+        }
       : r
   );
 
