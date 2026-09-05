@@ -3,12 +3,19 @@ import bolt from '@slack/bolt';
 import { WebClient } from '@slack/web-api';
 import { google } from 'googleapis';
 import { Readable } from 'node:stream';
+import cron from 'node-cron';
 import {
   currentInvoiceMonth,
   getDraftsForMonth,
+  getOpenInvoices,
   markRaised,
+  markPaid,
+  updateDueDate,
   formatDraftBlocks,
+  formatPaymentNudgeBlocks,
   raisedModal,
+  paidModal,
+  dueDateModal,
 } from './ar.js';
 
 const { App, ExpressReceiver } = bolt;
@@ -22,6 +29,11 @@ const {
   GOOGLE_REFRESH_TOKEN,
   DRIVE_PARENT_FOLDER_ID,
   AR_AUTHORIZED_USERS = '',
+  AR_CRON_CHANNEL_ID = '',
+  AR_CSM_USER_ID = '',
+  AR_OVERDUE_ESCALATION_DAYS = '7',
+  AR_CRON_TIMEZONE = 'Asia/Kolkata',
+  AR_ENABLE_CRON = 'true',
   PORT = 3000,
 } = process.env;
 
@@ -204,25 +216,50 @@ boltApp.message(async ({ event, context }) => {
   }
 });
 
-// ─── AR agent: /ar-check ───────────────────────────────────────────
+// ─── AR agent ──────────────────────────────────────────────────────
+async function postDraftsCheck(channelId) {
+  const month = currentInvoiceMonth();
+  const drafts = await getDraftsForMonth(month);
+  return slack.chat.postMessage({
+    channel: channelId,
+    text: `AR drafts for ${month}`,
+    blocks: formatDraftBlocks(drafts, month),
+  });
+}
+
+async function postPaymentCheck(channelId) {
+  const open = await getOpenInvoices();
+  return slack.chat.postMessage({
+    channel: channelId,
+    text: 'AR: payments to chase',
+    blocks: formatPaymentNudgeBlocks(open, {
+      csmUserId: AR_CSM_USER_ID,
+      escalationDays: Number(AR_OVERDUE_ESCALATION_DAYS),
+    }),
+  });
+}
+
 boltApp.command('/invoice-check', async ({ ack, respond, command }) => {
   await ack();
   try {
-    const month = currentInvoiceMonth();
-    const drafts = await getDraftsForMonth(month);
-    const blocks = formatDraftBlocks(drafts, month);
-    await slack.chat.postMessage({
-      channel: command.channel_id,
-      text: `AR drafts for ${month}`,
-      blocks,
-    });
+    await postDraftsCheck(command.channel_id);
   } catch (err) {
-    console.error('ar-check error:', err);
-    await respond({ response_type: 'ephemeral', text: `AR check failed: ${err.message}` });
+    console.error('invoice-check error:', err);
+    await respond({ response_type: 'ephemeral', text: `Invoice check failed: ${err.message}` });
   }
 });
 
-// Button click → open modal
+boltApp.command('/payment-check', async ({ ack, respond, command }) => {
+  await ack();
+  try {
+    await postPaymentCheck(command.channel_id);
+  } catch (err) {
+    console.error('payment-check error:', err);
+    await respond({ response_type: 'ephemeral', text: `Payment check failed: ${err.message}` });
+  }
+});
+
+// ── Mark Raised button → modal → write ──
 boltApp.action('ar_mark_raised', async ({ ack, body, client }) => {
   await ack();
   try {
@@ -247,7 +284,7 @@ boltApp.action('ar_mark_raised', async ({ ack, body, client }) => {
     }
     await client.views.open({
       trigger_id: body.trigger_id,
-      view: raisedModal(rowId, target.client, target.invoiceMonth),
+      view: raisedModal(rowId, target.client, target.invoiceMonth, body.channel.id, body.message.ts),
     });
   } catch (err) {
     console.error('ar_mark_raised error:', err);
@@ -259,7 +296,6 @@ boltApp.action('ar_mark_raised', async ({ ack, body, client }) => {
   }
 });
 
-// Modal submit → write back to Supabase
 boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
   if (!isArAuthorized(body.user.id)) {
     await ack({
@@ -269,33 +305,197 @@ boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
     return;
   }
 
-  const { rowId } = JSON.parse(view.private_metadata || '{}');
+  const { rowId, channelId, messageTs } = JSON.parse(view.private_metadata || '{}');
   const invoiceNo = view.state.values.invoice_no?.value?.value?.trim();
   const invoiceDate = view.state.values.invoice_date?.value?.selected_date;
 
   if (!invoiceNo) {
-    await ack({
-      response_action: 'errors',
-      errors: { invoice_no: 'Invoice # is required' },
-    });
+    await ack({ response_action: 'errors', errors: { invoice_no: 'Invoice # is required' } });
     return;
   }
 
   await ack();
   try {
     const updated = await markRaised(rowId, invoiceNo, invoiceDate, body.user.username);
-    await client.chat.postMessage({
-      channel: body.user.id,
-      text: `✅ Marked *${updated.client}* invoice as raised: \`${invoiceNo}\` (${invoiceDate || 'today'}).`,
-    });
+    const msg = `✅ *${updated.client}* marked raised: \`${invoiceNo}\` (${invoiceDate || 'today'}) — by <@${body.user.id}>`;
+    if (channelId && messageTs) {
+      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
+    }
+    await client.chat.postMessage({ channel: body.user.id, text: msg });
   } catch (err) {
     console.error('ar_raised_submit error:', err);
-    await client.chat.postMessage({
-      channel: body.user.id,
-      text: `❌ Couldn't save to FP&A: ${err.message}`,
+    await client.chat.postMessage({ channel: body.user.id, text: `❌ Couldn't save to FP&A: ${err.message}` });
+  }
+});
+
+// ── Mark Paid button → modal → write ──
+boltApp.action('ar_mark_paid', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    if (!isArAuthorized(body.user.id)) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: '🔒 Only the accountant or their manager can mark invoices as paid.',
+      });
+      return;
+    }
+    const rowId = body.actions[0].value;
+    const open = await getOpenInvoices();
+    const target = open.find((r) => String(r.id) === String(rowId));
+    if (!target) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: 'That invoice was already updated or is no longer open.',
+      });
+      return;
+    }
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: paidModal(rowId, target.client, target.invoiceNo, body.channel.id, body.message.ts),
+    });
+  } catch (err) {
+    console.error('ar_mark_paid error:', err);
+    await client.chat.postEphemeral({
+      channel: body.channel.id,
+      user: body.user.id,
+      text: `Couldn't open the form: ${err.message}`,
     });
   }
 });
+
+boltApp.view('ar_paid_submit', async ({ ack, body, view, client }) => {
+  if (!isArAuthorized(body.user.id)) {
+    await ack({
+      response_action: 'errors',
+      errors: { payment_date: 'You are not authorized to mark invoices as paid.' },
+    });
+    return;
+  }
+
+  const { rowId, channelId, messageTs } = JSON.parse(view.private_metadata || '{}');
+  const paymentDate = view.state.values.payment_date?.value?.selected_date;
+  if (!paymentDate) {
+    await ack({ response_action: 'errors', errors: { payment_date: 'Payment date is required' } });
+    return;
+  }
+
+  await ack();
+  try {
+    const updated = await markPaid(rowId, paymentDate, body.user.username);
+    const msg = `💰 *${updated.client}* paid on ${paymentDate} — \`${updated.invoiceNo}\` closed by <@${body.user.id}>`;
+    if (channelId && messageTs) {
+      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
+    }
+    await client.chat.postMessage({ channel: body.user.id, text: msg });
+  } catch (err) {
+    console.error('ar_paid_submit error:', err);
+    await client.chat.postMessage({ channel: body.user.id, text: `❌ Couldn't save to FP&A: ${err.message}` });
+  }
+});
+
+// ── Update due date button → modal → write ──
+boltApp.action('ar_update_due', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    if (!isArAuthorized(body.user.id)) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: '🔒 Only the accountant or their manager can update due dates.',
+      });
+      return;
+    }
+    const rowId = body.actions[0].value;
+    const open = await getOpenInvoices();
+    const target = open.find((r) => String(r.id) === String(rowId));
+    if (!target) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: 'That invoice was already updated or is no longer open.',
+      });
+      return;
+    }
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: dueDateModal(rowId, target.client, target.invoiceNo, target.dueDate, body.channel.id, body.message.ts),
+    });
+  } catch (err) {
+    console.error('ar_update_due error:', err);
+    await client.chat.postEphemeral({
+      channel: body.channel.id,
+      user: body.user.id,
+      text: `Couldn't open the form: ${err.message}`,
+    });
+  }
+});
+
+boltApp.view('ar_due_submit', async ({ ack, body, view, client }) => {
+  if (!isArAuthorized(body.user.id)) {
+    await ack({
+      response_action: 'errors',
+      errors: { new_due_date: 'You are not authorized to update due dates.' },
+    });
+    return;
+  }
+
+  const { rowId, channelId, messageTs } = JSON.parse(view.private_metadata || '{}');
+  const newDueDate = view.state.values.new_due_date?.value?.selected_date;
+  if (!newDueDate) {
+    await ack({ response_action: 'errors', errors: { new_due_date: 'A date is required' } });
+    return;
+  }
+
+  await ack();
+  try {
+    const updated = await updateDueDate(rowId, newDueDate, body.user.username);
+    const msg = `📅 *${updated.client}* · \`${updated.invoiceNo}\` — due date moved ${updated.previousDueDate || '—'} → ${newDueDate} by <@${body.user.id}>. Bot will resume chasing after that date.`;
+    if (channelId && messageTs) {
+      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
+    }
+    await client.chat.postMessage({ channel: body.user.id, text: msg });
+  } catch (err) {
+    console.error('ar_due_submit error:', err);
+    await client.chat.postMessage({ channel: body.user.id, text: `❌ Couldn't save to FP&A: ${err.message}` });
+  }
+});
+
+// ── Cron: 1st of month + every Friday, morning IST ──
+if (AR_ENABLE_CRON === 'true' && AR_CRON_CHANNEL_ID) {
+  cron.schedule(
+    '0 9 1 * *',
+    async () => {
+      try {
+        console.log('[cron] 1st-of-month AR post');
+        await postDraftsCheck(AR_CRON_CHANNEL_ID);
+        await postPaymentCheck(AR_CRON_CHANNEL_ID);
+      } catch (err) {
+        console.error('cron 1st-of-month error:', err);
+      }
+    },
+    { timezone: AR_CRON_TIMEZONE }
+  );
+
+  cron.schedule(
+    '0 9 * * 5',
+    async () => {
+      try {
+        console.log('[cron] Friday AR sweep');
+        await postDraftsCheck(AR_CRON_CHANNEL_ID);
+        await postPaymentCheck(AR_CRON_CHANNEL_ID);
+      } catch (err) {
+        console.error('cron Friday error:', err);
+      }
+    },
+    { timezone: AR_CRON_TIMEZONE }
+  );
+
+  console.log(`AR cron scheduled (channel=${AR_CRON_CHANNEL_ID}, tz=${AR_CRON_TIMEZONE})`);
+} else if (AR_ENABLE_CRON === 'true') {
+  console.warn('AR_ENABLE_CRON is true but AR_CRON_CHANNEL_ID is empty — cron disabled');
+}
 
 if (useSocketMode) {
   await boltApp.start();
