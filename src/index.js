@@ -33,6 +33,18 @@ const oauth2Client = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECR
 oauth2Client.setCredentials({ refresh_token: GOOGLE_REFRESH_TOKEN });
 const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
+let parentFolderName = 'the configured Drive folder';
+try {
+  const p = await drive.files.get({
+    fileId: DRIVE_PARENT_FOLDER_ID,
+    fields: 'name',
+    supportsAllDrives: true,
+  });
+  if (p.data.name) parentFolderName = p.data.name;
+} catch (err) {
+  console.error('could not fetch parent folder name:', err.message);
+}
+
 if (receiver) {
   receiver.app.get('/', (_req, res) => res.send('drivebot ok'));
 }
@@ -116,7 +128,7 @@ boltApp.event('app_mention', async ({ event, context }) => {
 
     if (files.length === 0) {
       await reply(
-        'No files in this thread — attach the files (or forward a message that has them) and mention me again.'
+        `Hi! I'm drivebot — I save files from Slack into the Shared Drive under *${parentFolderName}*.\n\nI don't see any files in this thread yet. Attach the files (or forward a message with them) and mention me again.`
       );
       return;
     }
@@ -133,7 +145,7 @@ boltApp.event('app_mention', async ({ event, context }) => {
       .join('\n');
     const more = files.length > 5 ? `\n…and ${files.length - 5} more` : '';
     await reply(
-      `Found ${files.length} file${files.length === 1 ? '' : 's'}:\n${preview}${more}\n\nReply in this thread with the folder name to create.`
+      `👋 Hi! I'm drivebot — I save files from Slack into the Shared Drive under *${parentFolderName}*.\n\nI found ${files.length} file${files.length === 1 ? '' : 's'} in this thread:\n${preview}${more}\n\nReply here with a folder name and I'll create it and upload the file${files.length === 1 ? '' : 's'} inside — e.g. \`Acme Corp\`.`
     );
   } catch (err) {
     console.error('app_mention error:', err);
