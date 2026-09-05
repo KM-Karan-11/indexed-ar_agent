@@ -1,0 +1,15 @@
+{
+  "name": "drivebot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "get-refresh-token": "node scripts/get-refresh-token.js"
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.22.0",
+    "dotenv": "^16.4.5",
+    "googleapis": "^144.0.0"
+  }
+}
