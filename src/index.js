@@ -492,14 +492,14 @@ if (AR_ENABLE_CRON === 'true' && AR_CRON_CHANNEL_ID) {
   );
 
   cron.schedule(
-    '0 9 * * 5',
+    '0 11 * * 1',
     async () => {
       try {
-        console.log('[cron] Friday AR sweep');
+        console.log('[cron] Monday AR sweep');
         await postDraftsCheck(AR_CRON_CHANNEL_ID);
         await postPaymentCheck(AR_CRON_CHANNEL_ID);
       } catch (err) {
-        console.error('cron Friday error:', err);
+        console.error('cron Monday error:', err);
       }
     },
     { timezone: AR_CRON_TIMEZONE }
