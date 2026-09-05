@@ -165,6 +165,7 @@ export function formatDraftBlocks(drafts, month) {
   sorted.forEach((d, i) => {
     blocks.push({
       type: 'section',
+      block_id: `ar_row_${d.id}`,
       text: {
         type: 'mrkdwn',
         text: `*${i + 1}. ${d.client}* (${d.entity})\n${usdFmt(d.usdValue || d.amount)} · ${d.mode || '—'} · due ${d.dueDate || d.cashMonth || '—'}`,
@@ -212,6 +213,7 @@ export function formatPaymentNudgeBlocks(rows, opts = {}) {
     const tag = overdue && csmUserId ? ` · <@${csmUserId}> please chase` : '';
     blocks.push({
       type: 'section',
+      block_id: `ar_row_${r.id}`,
       text: {
         type: 'mrkdwn',
         text: `*${i + 1}. ${r.client}* (${r.entity}) · \`${r.invoiceNo}\`\n${usdFmt(r.usdValue || r.amount)} · ${r.mode || '—'} · ${lag}${tag}`,

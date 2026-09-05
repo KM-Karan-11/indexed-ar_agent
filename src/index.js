@@ -45,6 +45,49 @@ function isArAuthorized(userId) {
   return arAllowlist.includes(userId);
 }
 
+// Update the original list message so a completed row shows ✅ instead of a button.
+// Fetches the message's current blocks, finds the section/actions blocks tagged
+// with the rowId, strikes through the row text, and removes the button(s).
+async function markListRowDone(client, channelId, messageTs, rowId, doneEmoji) {
+  try {
+    const res = await client.conversations.history({
+      channel: channelId,
+      latest: messageTs,
+      inclusive: true,
+      limit: 1,
+    });
+    const msg = res.messages?.[0];
+    if (!msg || !Array.isArray(msg.blocks)) return;
+
+    const rowBlockId = `ar_row_${rowId}`;
+    const actionsBlockId = `ar_actions_${rowId}`;
+
+    const newBlocks = msg.blocks
+      .map((b) => {
+        if (b.block_id === rowBlockId) {
+          const { accessory, ...rest } = b;
+          const t = b.text?.text || '';
+          return {
+            ...rest,
+            text: { ...b.text, text: `${doneEmoji} ~${t}~` },
+          };
+        }
+        if (b.block_id === actionsBlockId) return null;
+        return b;
+      })
+      .filter(Boolean);
+
+    await client.chat.update({
+      channel: channelId,
+      ts: messageTs,
+      text: msg.text || 'AR update',
+      blocks: newBlocks,
+    });
+  } catch (err) {
+    console.error('markListRowDone failed:', err.message);
+  }
+}
+
 async function dmActorAndManager(client, actorId, text) {
   try {
     await client.chat.postMessage({ channel: actorId, text });
@@ -359,6 +402,7 @@ boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
     const msg = `✅ *${updated.client}* marked raised: \`${invoiceNo}\` (${invoiceDate || 'today'}) — by <@${body.user.id}>`;
     if (channelId && messageTs) {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
+      await markListRowDone(client, channelId, messageTs, rowId, '✅');
     }
     await dmActorAndManager(client, body.user.id, msg);
   } catch (err) {
@@ -426,6 +470,7 @@ boltApp.view('ar_paid_submit', async ({ ack, body, view, client }) => {
     const msg = `💰 *${updated.client}* paid on ${paymentDate} — \`${updated.invoiceNo}\` closed by <@${body.user.id}>`;
     if (channelId && messageTs) {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
+      await markListRowDone(client, channelId, messageTs, rowId, '💰');
     }
     await dmActorAndManager(client, body.user.id, msg);
   } catch (err) {
