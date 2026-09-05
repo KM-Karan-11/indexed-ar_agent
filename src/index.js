@@ -46,8 +46,12 @@ function isArAuthorized(userId) {
 }
 
 async function dmActorAndManager(client, actorId, text) {
-  await client.chat.postMessage({ channel: actorId, text });
-  if (AR_MANAGER_ID && AR_MANAGER_ID !== actorId) {
+  try {
+    await client.chat.postMessage({ channel: actorId, text });
+  } catch (err) {
+    console.error('dm actor failed:', err.message);
+  }
+  if (AR_MANAGER_ID) {
     try {
       await client.chat.postMessage({ channel: AR_MANAGER_ID, text });
     } catch (err) {
@@ -230,19 +234,30 @@ boltApp.message(async ({ event, context }) => {
 });
 
 // ─── AR agent ──────────────────────────────────────────────────────
-async function postDraftsCheck(channelId) {
+async function postDraftsCheck(channelId, { ccManager = false } = {}) {
   const month = currentInvoiceMonth();
   const drafts = await getDraftsForMonth(month);
-  return slack.chat.postMessage({
+  const result = await slack.chat.postMessage({
     channel: channelId,
     text: `AR drafts for ${month}`,
     blocks: formatDraftBlocks(drafts, month),
   });
+  if (ccManager && AR_MANAGER_ID) {
+    try {
+      await slack.chat.postMessage({
+        channel: AR_MANAGER_ID,
+        text: `📣 AR drafts nudge posted in <#${channelId}> — ${drafts.length} draft${drafts.length === 1 ? '' : 's'} for ${month}`,
+      });
+    } catch (err) {
+      console.error('cc manager (drafts) failed:', err.message);
+    }
+  }
+  return result;
 }
 
-async function postPaymentCheck(channelId) {
+async function postPaymentCheck(channelId, { ccManager = false } = {}) {
   const open = await getOpenInvoices();
-  return slack.chat.postMessage({
+  const result = await slack.chat.postMessage({
     channel: channelId,
     text: 'AR: payments to chase',
     blocks: formatPaymentNudgeBlocks(open, {
@@ -250,6 +265,17 @@ async function postPaymentCheck(channelId) {
       escalationDays: Number(AR_OVERDUE_ESCALATION_DAYS),
     }),
   });
+  if (ccManager && AR_MANAGER_ID) {
+    try {
+      await slack.chat.postMessage({
+        channel: AR_MANAGER_ID,
+        text: `📣 AR payments nudge posted in <#${channelId}> — ${open.length} open invoice${open.length === 1 ? '' : 's'} to chase`,
+      });
+    } catch (err) {
+      console.error('cc manager (payments) failed:', err.message);
+    }
+  }
+  return result;
 }
 
 boltApp.command('/invoice-check', async ({ ack, respond, command }) => {
@@ -482,8 +508,8 @@ if (AR_ENABLE_CRON === 'true' && AR_CRON_CHANNEL_ID) {
     async () => {
       try {
         console.log('[cron] 1st-of-month AR post');
-        await postDraftsCheck(AR_CRON_CHANNEL_ID);
-        await postPaymentCheck(AR_CRON_CHANNEL_ID);
+        await postDraftsCheck(AR_CRON_CHANNEL_ID, { ccManager: true });
+        await postPaymentCheck(AR_CRON_CHANNEL_ID, { ccManager: true });
       } catch (err) {
         console.error('cron 1st-of-month error:', err);
       }
@@ -496,8 +522,8 @@ if (AR_ENABLE_CRON === 'true' && AR_CRON_CHANNEL_ID) {
     async () => {
       try {
         console.log('[cron] Monday AR sweep');
-        await postDraftsCheck(AR_CRON_CHANNEL_ID);
-        await postPaymentCheck(AR_CRON_CHANNEL_ID);
+        await postDraftsCheck(AR_CRON_CHANNEL_ID, { ccManager: true });
+        await postPaymentCheck(AR_CRON_CHANNEL_ID, { ccManager: true });
       } catch (err) {
         console.error('cron Monday error:', err);
       }
