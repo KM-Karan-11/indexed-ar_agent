@@ -386,7 +386,7 @@ boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
     const updated = await markRaised(rowId, invoiceNo, invoiceDate, body.user.username);
     const msg = `✅ *${updated.client}* marked raised: \`${invoiceNo}\` (${invoiceDate || 'today'}) — by <@${body.user.id}>`;
     if (channelId && messageTs) {
-      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: withCc(msg) });
+      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
       await markListRowDone(client, channelId, messageTs, rowId, '✅');
     }
   } catch (err) {
@@ -455,7 +455,7 @@ boltApp.view('ar_paid_submit', async ({ ack, body, view, client }) => {
     const updated = await markPaid(rowId, paymentDate, body.user.username);
     const msg = `💰 *${updated.client}* paid on ${paymentDate} — \`${updated.invoiceNo}\` closed by <@${body.user.id}>`;
     if (channelId && messageTs) {
-      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: withCc(msg) });
+      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
       await markListRowDone(client, channelId, messageTs, rowId, '💰');
     }
   } catch (err) {
@@ -524,7 +524,7 @@ boltApp.view('ar_due_submit', async ({ ack, body, view, client }) => {
     const updated = await updateDueDate(rowId, newDueDate, body.user.username);
     const msg = `📅 *${updated.client}* · \`${updated.invoiceNo}\` — due date moved ${updated.previousDueDate || '—'} → ${newDueDate} by <@${body.user.id}>. Bot will resume chasing after that date.`;
     if (channelId && messageTs) {
-      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: withCc(msg) });
+      await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
     }
   } catch (err) {
     console.error('ar_due_submit error:', err);
