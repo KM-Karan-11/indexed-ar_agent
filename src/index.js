@@ -31,6 +31,8 @@ const {
   AR_AUTHORIZED_USERS = '',
   AR_CRON_CHANNEL_ID = '',
   AR_CSM_USER_ID = '',
+  AR_MANAGER_ID = '',
+  AR_BOOKKEEPER_ID = '',
   AR_OVERDUE_ESCALATION_DAYS = '7',
   AR_CRON_TIMEZONE = 'Asia/Kolkata',
   AR_ENABLE_CRON = 'true',
@@ -41,6 +43,17 @@ const arAllowlist = AR_AUTHORIZED_USERS.split(',').map((s) => s.trim()).filter(B
 function isArAuthorized(userId) {
   if (arAllowlist.length === 0) return true;
   return arAllowlist.includes(userId);
+}
+
+async function dmActorAndManager(client, actorId, text) {
+  await client.chat.postMessage({ channel: actorId, text });
+  if (AR_MANAGER_ID && AR_MANAGER_ID !== actorId) {
+    try {
+      await client.chat.postMessage({ channel: AR_MANAGER_ID, text });
+    } catch (err) {
+      console.error('cc manager failed:', err.message);
+    }
+  }
 }
 
 const useSocketMode = Boolean(SLACK_APP_TOKEN);
@@ -321,10 +334,10 @@ boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
     if (channelId && messageTs) {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
     }
-    await client.chat.postMessage({ channel: body.user.id, text: msg });
+    await dmActorAndManager(client, body.user.id, msg);
   } catch (err) {
     console.error('ar_raised_submit error:', err);
-    await client.chat.postMessage({ channel: body.user.id, text: `❌ Couldn't save to FP&A: ${err.message}` });
+    await dmActorAndManager(client, body.user.id, `❌ Couldn't save to FP&A: ${err.message}`);
   }
 });
 
@@ -388,10 +401,10 @@ boltApp.view('ar_paid_submit', async ({ ack, body, view, client }) => {
     if (channelId && messageTs) {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
     }
-    await client.chat.postMessage({ channel: body.user.id, text: msg });
+    await dmActorAndManager(client, body.user.id, msg);
   } catch (err) {
     console.error('ar_paid_submit error:', err);
-    await client.chat.postMessage({ channel: body.user.id, text: `❌ Couldn't save to FP&A: ${err.message}` });
+    await dmActorAndManager(client, body.user.id, `❌ Couldn't save to FP&A: ${err.message}`);
   }
 });
 
@@ -455,10 +468,10 @@ boltApp.view('ar_due_submit', async ({ ack, body, view, client }) => {
     if (channelId && messageTs) {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
     }
-    await client.chat.postMessage({ channel: body.user.id, text: msg });
+    await dmActorAndManager(client, body.user.id, msg);
   } catch (err) {
     console.error('ar_due_submit error:', err);
-    await client.chat.postMessage({ channel: body.user.id, text: `❌ Couldn't save to FP&A: ${err.message}` });
+    await dmActorAndManager(client, body.user.id, `❌ Couldn't save to FP&A: ${err.message}`);
   }
 });
 
