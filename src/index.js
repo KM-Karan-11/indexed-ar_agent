@@ -409,10 +409,11 @@ boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
       await markListRowDone(client, channelId, messageTs, rowId, '✅');
     }
-    await dmActorAndManager(client, body.user.id, msg);
   } catch (err) {
     console.error('ar_raised_submit error:', err);
-    await dmActorAndManager(client, body.user.id, `❌ Couldn't save to FP&A: ${err.message}`);
+    try {
+      await client.chat.postMessage({ channel: body.user.id, text: `❌ Couldn't save to FP&A: ${err.message}` });
+    } catch {}
   }
 });
 
@@ -477,10 +478,11 @@ boltApp.view('ar_paid_submit', async ({ ack, body, view, client }) => {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
       await markListRowDone(client, channelId, messageTs, rowId, '💰');
     }
-    await dmActorAndManager(client, body.user.id, msg);
   } catch (err) {
     console.error('ar_paid_submit error:', err);
-    await dmActorAndManager(client, body.user.id, `❌ Couldn't save to FP&A: ${err.message}`);
+    try {
+      await client.chat.postMessage({ channel: body.user.id, text: `❌ Couldn't save to FP&A: ${err.message}` });
+    } catch {}
   }
 });
 
@@ -544,10 +546,11 @@ boltApp.view('ar_due_submit', async ({ ack, body, view, client }) => {
     if (channelId && messageTs) {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
     }
-    await dmActorAndManager(client, body.user.id, msg);
   } catch (err) {
     console.error('ar_due_submit error:', err);
-    await dmActorAndManager(client, body.user.id, `❌ Couldn't save to FP&A: ${err.message}`);
+    try {
+      await client.chat.postMessage({ channel: body.user.id, text: `❌ Couldn't save to FP&A: ${err.message}` });
+    } catch {}
   }
 });
 
