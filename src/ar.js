@@ -38,16 +38,15 @@ export async function getDraftsForMonth(month) {
   );
 }
 
-// FP&A pre-fills paymentDate = invoiceDate as an optimistic placeholder for every
-// row (not a real payment record). We treat that as "unpaid" unless status is
-// explicitly 'Paid' or paymentDate differs from invoiceDate (i.e., someone recorded
-// a real payment date). This is a workaround until the FP&A tool changes that
-// behavior or we sync from Xero directly.
+// FP&A pre-fills paymentDate with multiple placeholder patterns depending on
+// payment mode (Stripe → invoiceDate, Bank Transfer → dueDate+1d, etc.), so
+// paymentDate can't be trusted as a "was it actually paid" signal. We treat
+// any raised invoice as open unless status is explicitly 'Paid'.
+// Our own markPaid() always sets status='Paid', so bot-managed rows work
+// correctly. Historical rows need status='Paid' or deletion to be treated as done.
 export function isOpen(r) {
   if (!r.invoiceNo) return false;
-  if (r.status === 'Paid') return false;
-  if (!r.paymentDate) return true;
-  return r.paymentDate === r.invoiceDate;
+  return r.status !== 'Paid';
 }
 
 // All open (raised, not truly paid) invoices, sorted by most-overdue first.
@@ -154,17 +153,21 @@ export function formatDraftBlocks(drafts, month) {
     ];
   }
 
+  const sorted = [...drafts].sort((a, b) =>
+    (a.dueDate || '9999').localeCompare(b.dueDate || '9999')
+  );
+
   const blocks = [
     { type: 'header', text: { type: 'plain_text', text: `AR: drafts to raise for ${month}` } },
     { type: 'divider' },
   ];
 
-  for (const d of drafts) {
+  sorted.forEach((d, i) => {
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*${d.client}* (${d.entity})\n${usdFmt(d.usdValue || d.amount)} · ${d.mode || '—'} · due ${d.dueDate || d.cashMonth || '—'}`,
+        text: `*${i + 1}. ${d.client}* (${d.entity})\n${usdFmt(d.usdValue || d.amount)} · ${d.mode || '—'} · due ${d.dueDate || d.cashMonth || '—'}`,
       },
       accessory: {
         type: 'button',
@@ -174,7 +177,7 @@ export function formatDraftBlocks(drafts, month) {
         value: String(d.id),
       },
     });
-  }
+  });
   return blocks;
 }
 
@@ -189,12 +192,16 @@ export function formatPaymentNudgeBlocks(rows, opts = {}) {
     ];
   }
 
+  const sorted = [...rows].sort((a, b) =>
+    (a.dueDate || '9999').localeCompare(b.dueDate || '9999')
+  );
+
   const blocks = [
     { type: 'header', text: { type: 'plain_text', text: 'AR: payments to chase' } },
     { type: 'divider' },
   ];
 
-  for (const r of rows) {
+  sorted.forEach((r, i) => {
     const overdue = r.daysPastDue >= escalationDays;
     const lag =
       r.daysPastDue === 0
@@ -207,7 +214,7 @@ export function formatPaymentNudgeBlocks(rows, opts = {}) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*${r.client}* (${r.entity}) · \`${r.invoiceNo}\`\n${usdFmt(r.usdValue || r.amount)} · ${r.mode || '—'} · ${lag}${tag}`,
+        text: `*${i + 1}. ${r.client}* (${r.entity}) · \`${r.invoiceNo}\`\n${usdFmt(r.usdValue || r.amount)} · ${r.mode || '—'} · ${lag}${tag}`,
       },
     });
     blocks.push({
@@ -229,7 +236,7 @@ export function formatPaymentNudgeBlocks(rows, opts = {}) {
         },
       ],
     });
-  }
+  });
   return blocks;
 }
 
