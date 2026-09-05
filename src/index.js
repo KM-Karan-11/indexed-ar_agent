@@ -564,6 +564,27 @@ if (AR_ENABLE_CRON === 'true' && AR_CRON_CHANNEL_ID) {
     { timezone: AR_CRON_TIMEZONE }
   );
 
+  // 28th of each month at 10am IST: nudge Karan to lock next month's forecast
+  cron.schedule(
+    '0 10 28 * *',
+    async () => {
+      try {
+        console.log('[cron] forecast reminder');
+        const nextMonth = new Date();
+        nextMonth.setMonth(nextMonth.getMonth() + 1);
+        const monthName = nextMonth.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+        const managerTag = AR_MANAGER_ID ? `<@${AR_MANAGER_ID}>` : 'Karan';
+        await slack.chat.postMessage({
+          channel: AR_CRON_CHANNEL_ID,
+          text: `${managerTag} — is *${monthName}* forecast updated in the FP&A tool? That's the base for the 1st-of-month billing lineup, so ideally locked before month-end.`,
+        });
+      } catch (err) {
+        console.error('cron forecast reminder error:', err);
+      }
+    },
+    { timezone: AR_CRON_TIMEZONE }
+  );
+
   console.log(`AR cron scheduled (channel=${AR_CRON_CHANNEL_ID}, tz=${AR_CRON_TIMEZONE})`);
 } else if (AR_ENABLE_CRON === 'true') {
   console.warn('AR_ENABLE_CRON is true but AR_CRON_CHANNEL_ID is empty — cron disabled');
