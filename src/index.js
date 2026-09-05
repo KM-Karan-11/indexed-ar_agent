@@ -90,15 +90,17 @@ async function markListRowDone(client, channelId, messageTs, rowId, doneEmoji) {
 
 async function dmActorAndManager(client, actorId, text) {
   try {
-    await client.chat.postMessage({ channel: actorId, text });
+    const r = await client.chat.postMessage({ channel: actorId, text });
+    console.log(`[dm] actor=${actorId} ok=${r.ok} channel=${r.channel}`);
   } catch (err) {
-    console.error('dm actor failed:', err.message);
+    console.error('dm actor failed:', actorId, err.message);
   }
   if (AR_MANAGER_ID) {
     try {
-      await client.chat.postMessage({ channel: AR_MANAGER_ID, text });
+      const r = await client.chat.postMessage({ channel: AR_MANAGER_ID, text });
+      console.log(`[dm] manager=${AR_MANAGER_ID} ok=${r.ok} channel=${r.channel}`);
     } catch (err) {
-      console.error('cc manager failed:', err.message);
+      console.error('cc manager failed:', AR_MANAGER_ID, err.message);
     }
   }
 }
@@ -324,8 +326,9 @@ async function postPaymentCheck(channelId, { ccManager = false } = {}) {
 
 boltApp.command('/invoice-check', async ({ ack, respond, command }) => {
   await ack();
+  console.log(`[cmd] /invoice-check by ${command.user_id} in ${command.channel_id}`);
   try {
-    await postDraftsCheck(command.channel_id);
+    await postDraftsCheck(command.channel_id, { ccManager: true });
   } catch (err) {
     console.error('invoice-check error:', err);
     await respond({ response_type: 'ephemeral', text: `Invoice check failed: ${err.message}` });
@@ -334,8 +337,9 @@ boltApp.command('/invoice-check', async ({ ack, respond, command }) => {
 
 boltApp.command('/payment-check', async ({ ack, respond, command }) => {
   await ack();
+  console.log(`[cmd] /payment-check by ${command.user_id} in ${command.channel_id}`);
   try {
-    await postPaymentCheck(command.channel_id);
+    await postPaymentCheck(command.channel_id, { ccManager: true });
   } catch (err) {
     console.error('payment-check error:', err);
     await respond({ response_type: 'ephemeral', text: `Payment check failed: ${err.message}` });
