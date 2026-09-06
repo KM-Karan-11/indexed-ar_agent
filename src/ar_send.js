@@ -104,13 +104,18 @@ function usdFmt(n) {
 
 // Block builders — Q1 asks whether the invoice needs sending; Q2 asks whether it's been sent.
 export function sendQ1Blocks(row) {
+  const today = localDate();
+  const dateLabel =
+    row.invoiceDate === today
+      ? `Invoice dated *today*.`
+      : `Invoice dated *${row.invoiceDate}*.`;
   return [
     {
       type: 'section',
       block_id: `ar_send_q1_${row.id}`,
       text: {
         type: 'mrkdwn',
-        text: `📤 *${row.client}* · \`${row.invoiceNo}\` (${usdFmt(row.usdValue || row.amount)})\nToday is the invoice date. Does this invoice need to be sent to the client?`,
+        text: `📤 *${row.client}* · \`${row.invoiceNo}\` (${usdFmt(row.usdValue || row.amount)})\n${dateLabel} Does this invoice need to be sent to the client?`,
       },
     },
     {
