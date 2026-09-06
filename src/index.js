@@ -17,6 +17,13 @@ import {
   paidModal,
   dueDateModal,
 } from './ar.js';
+import {
+  getSendSweep,
+  upsertSendState,
+  sendQ1Blocks,
+  sendQ2Blocks,
+  getArRow,
+} from './ar_send.js';
 
 const { App, ExpressReceiver } = bolt;
 
@@ -326,6 +333,17 @@ boltApp.command('/payment-check', async ({ ack, respond, command }) => {
   }
 });
 
+boltApp.command('/send-check', async ({ ack, respond, command }) => {
+  await ack();
+  console.log(`[cmd] /send-check by ${command.user_id} in ${command.channel_id}`);
+  try {
+    await postSendSweep(command.channel_id);
+  } catch (err) {
+    console.error('send-check error:', err);
+    await respond({ response_type: 'ephemeral', text: `Send check failed: ${err.message}` });
+  }
+});
+
 // ── Mark Raised button → modal → write ──
 boltApp.action('ar_mark_raised', async ({ ack, body, client }) => {
   await ack();
@@ -540,6 +558,154 @@ boltApp.view('ar_due_submit', async ({ ack, body, view, client }) => {
   }
 });
 
+// ── Send-to-client Q1 buttons ──
+async function ackAndUpdateMessage(client, body, updatedText) {
+  try {
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      text: updatedText,
+      blocks: [
+        {
+          type: 'section',
+          text: { type: 'mrkdwn', text: updatedText },
+        },
+      ],
+    });
+  } catch (err) {
+    console.error('message update failed:', err.message);
+  }
+}
+
+boltApp.action('ar_send_q1_yes', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    if (!isArAuthorized(body.user.id)) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: '🔒 Only the accountant or manager can answer this.',
+      });
+      return;
+    }
+    const rowId = body.actions[0].value;
+    await upsertSendState(rowId, { send_confirmed: 'yes', last_nudged_at: new Date().toISOString() }, body.user.username);
+    const row = await getArRow(rowId);
+    await ackAndUpdateMessage(client, body, `📤 *${row?.client}* · \`${row?.invoiceNo}\` — send required. Confirmed by <@${body.user.id}>.`);
+    // Post Q2 immediately in the same channel
+    if (row) {
+      await client.chat.postMessage({
+        channel: body.channel.id,
+        text: `Has ${row.invoiceNo} been sent to the client?`,
+        blocks: sendQ2Blocks(row),
+      });
+    }
+  } catch (err) {
+    console.error('ar_send_q1_yes error:', err);
+  }
+});
+
+boltApp.action('ar_send_q1_not_required', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    if (!isArAuthorized(body.user.id)) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: '🔒 Only the accountant or manager can answer this.',
+      });
+      return;
+    }
+    const rowId = body.actions[0].value;
+    await upsertSendState(rowId, { send_confirmed: 'not_required' }, body.user.username);
+    const row = await getArRow(rowId);
+    await ackAndUpdateMessage(client, body, `⊘ *${row?.client}* · \`${row?.invoiceNo}\` — send not required. Marked by <@${body.user.id}>.`);
+  } catch (err) {
+    console.error('ar_send_q1_not_required error:', err);
+  }
+});
+
+boltApp.action('ar_send_q2_yes', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    if (!isArAuthorized(body.user.id)) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: '🔒 Only the accountant or manager can answer this.',
+      });
+      return;
+    }
+    const rowId = body.actions[0].value;
+    await upsertSendState(rowId, { sent_to_client: 'yes' }, body.user.username);
+    const row = await getArRow(rowId);
+    await ackAndUpdateMessage(client, body, `✉️ *${row?.client}* · \`${row?.invoiceNo}\` — sent to client. Confirmed by <@${body.user.id}>.`);
+  } catch (err) {
+    console.error('ar_send_q2_yes error:', err);
+  }
+});
+
+boltApp.action('ar_send_q2_no', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    if (!isArAuthorized(body.user.id)) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: '🔒 Only the accountant or manager can answer this.',
+      });
+      return;
+    }
+    const rowId = body.actions[0].value;
+    await upsertSendState(rowId, { sent_to_client: 'no', last_nudged_at: new Date().toISOString() }, body.user.username);
+    const row = await getArRow(rowId);
+    await ackAndUpdateMessage(client, body, `🕒 *${row?.client}* · \`${row?.invoiceNo}\` — not sent yet. Bot will re-ask tomorrow. Marked by <@${body.user.id}>.`);
+  } catch (err) {
+    console.error('ar_send_q2_no error:', err);
+  }
+});
+
+boltApp.action('ar_send_q2_not_required', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    if (!isArAuthorized(body.user.id)) {
+      await client.chat.postEphemeral({
+        channel: body.channel.id,
+        user: body.user.id,
+        text: '🔒 Only the accountant or manager can answer this.',
+      });
+      return;
+    }
+    const rowId = body.actions[0].value;
+    await upsertSendState(rowId, { sent_to_client: 'not_required' }, body.user.username);
+    const row = await getArRow(rowId);
+    await ackAndUpdateMessage(client, body, `⊘ *${row?.client}* · \`${row?.invoiceNo}\` — send not required. Marked by <@${body.user.id}>.`);
+  } catch (err) {
+    console.error('ar_send_q2_not_required error:', err);
+  }
+});
+
+async function postSendSweep(channelId) {
+  const { q1, q2 } = await getSendSweep();
+  console.log(`[send-sweep] q1=${q1.length} q2=${q2.length}`);
+  for (const row of q1) {
+    await slack.chat.postMessage({
+      channel: channelId,
+      text: `Send ${row.invoiceNo} to client today?`,
+      blocks: sendQ1Blocks(row),
+    });
+  }
+  for (const row of q2) {
+    await slack.chat.postMessage({
+      channel: channelId,
+      text: `Has ${row.invoiceNo} been sent to the client?`,
+      blocks: sendQ2Blocks(row, { repeatNudge: true }),
+    });
+    // mark as nudged so we don't double-post within the same day
+    await upsertSendState(row.id, { last_nudged_at: new Date().toISOString() }, 'ar-agent-cron');
+  }
+}
+
 // ── Cron: 1st of month + every Friday, morning IST ──
 if (AR_ENABLE_CRON === 'true' && AR_CRON_CHANNEL_ID) {
   cron.schedule(
@@ -565,6 +731,20 @@ if (AR_ENABLE_CRON === 'true' && AR_CRON_CHANNEL_ID) {
         await postPaymentCheck(AR_CRON_CHANNEL_ID);
       } catch (err) {
         console.error('cron Monday error:', err);
+      }
+    },
+    { timezone: AR_CRON_TIMEZONE }
+  );
+
+  // Daily at 9am IST: post send-to-client sweep (Q1 for invoices reaching invoiceDate, Q2 daily re-nudge)
+  cron.schedule(
+    '0 9 * * *',
+    async () => {
+      try {
+        console.log('[cron] daily send-sweep');
+        await postSendSweep(AR_CRON_CHANNEL_ID);
+      } catch (err) {
+        console.error('cron daily send-sweep error:', err);
       }
     },
     { timezone: AR_CRON_TIMEZONE }
