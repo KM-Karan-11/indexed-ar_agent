@@ -89,7 +89,14 @@ export async function markRaised(rowId, invoiceNo, invoiceDate, actorEmail) {
     updated_by: actorEmail || 'ar-agent',
   }).eq('id', 1);
   if (error) throw new Error(`Supabase write failed: ${error.message}`);
-  return target;
+
+  const verifyRow = await fetchForecastRow();
+  const after = (verifyRow.ar_fcst || []).find((r) => String(r.id) === String(rowId));
+  const verified = !!(after && after.invoiceNo === invoiceNo && after.status === 'Invoiced');
+  console.log(
+    `[write] markRaised id=${rowId} actor=${actorEmail} before=${JSON.stringify({ invoiceNo: target.invoiceNo, status: target.status, paymentDate: target.paymentDate })} after=${JSON.stringify({ invoiceNo: after?.invoiceNo, status: after?.status, paymentDate: after?.paymentDate })} verified=${verified}`
+  );
+  return { ...target, invoiceNo, invoiceDate: invoiceDate || target.invoiceDate, status: 'Invoiced', verified };
 }
 
 export async function updateDueDate(rowId, newDueDate, actorEmail) {
@@ -108,7 +115,14 @@ export async function updateDueDate(rowId, newDueDate, actorEmail) {
     updated_by: actorEmail || 'ar-agent',
   }).eq('id', 1);
   if (error) throw new Error(`Supabase write failed: ${error.message}`);
-  return { ...target, previousDueDate: target.dueDate, dueDate: newDueDate };
+
+  const verifyRow = await fetchForecastRow();
+  const after = (verifyRow.ar_fcst || []).find((r) => String(r.id) === String(rowId));
+  const verified = !!(after && after.dueDate === newDueDate);
+  console.log(
+    `[write] updateDueDate id=${rowId} actor=${actorEmail} before=${JSON.stringify({ dueDate: target.dueDate })} after=${JSON.stringify({ dueDate: after?.dueDate })} verified=${verified}`
+  );
+  return { ...target, previousDueDate: target.dueDate, dueDate: newDueDate, verified };
 }
 
 export async function markPaid(rowId, paymentDate, actorEmail) {
@@ -129,7 +143,14 @@ export async function markPaid(rowId, paymentDate, actorEmail) {
     updated_by: actorEmail || 'ar-agent',
   }).eq('id', 1);
   if (error) throw new Error(`Supabase write failed: ${error.message}`);
-  return target;
+
+  const verifyRow = await fetchForecastRow();
+  const after = (verifyRow.ar_fcst || []).find((r) => String(r.id) === String(rowId));
+  const verified = !!(after && after.paymentDate === paymentDate && after.status === 'Paid');
+  console.log(
+    `[write] markPaid id=${rowId} actor=${actorEmail} before=${JSON.stringify({ paymentDate: target.paymentDate, status: target.status })} after=${JSON.stringify({ paymentDate: after?.paymentDate, status: after?.status })} verified=${verified}`
+  );
+  return { ...target, paymentDate, status: 'Paid', verified };
 }
 
 function usdFmt(n) {

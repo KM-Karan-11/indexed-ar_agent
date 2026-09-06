@@ -384,10 +384,12 @@ boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
   await ack();
   try {
     const updated = await markRaised(rowId, invoiceNo, invoiceDate, body.user.username);
-    const msg = `✅ *${updated.client}* marked raised: \`${invoiceNo}\` (${invoiceDate || 'today'}) — by <@${body.user.id}>`;
+    const msg = updated.verified
+      ? `✅ *${updated.client}* marked raised: \`${invoiceNo}\` (${invoiceDate || 'today'}) — by <@${body.user.id}>`
+      : `⚠️ *${updated.client}* — wrote \`${invoiceNo}\` to FP&A but the tool didn't persist the change on read-back. Please double-check the row manually.`;
     if (channelId && messageTs) {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
-      await markListRowDone(client, channelId, messageTs, rowId, '✅');
+      if (updated.verified) await markListRowDone(client, channelId, messageTs, rowId, '✅');
     }
   } catch (err) {
     console.error('ar_raised_submit error:', err);
@@ -453,10 +455,12 @@ boltApp.view('ar_paid_submit', async ({ ack, body, view, client }) => {
   await ack();
   try {
     const updated = await markPaid(rowId, paymentDate, body.user.username);
-    const msg = `💰 *${updated.client}* paid on ${paymentDate} — \`${updated.invoiceNo}\` closed by <@${body.user.id}>`;
+    const msg = updated.verified
+      ? `💰 *${updated.client}* paid on ${paymentDate} — \`${updated.invoiceNo}\` closed by <@${body.user.id}>`
+      : `⚠️ *${updated.client}* — wrote payment date to FP&A but the tool didn't persist it on read-back. Please double-check.`;
     if (channelId && messageTs) {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
-      await markListRowDone(client, channelId, messageTs, rowId, '💰');
+      if (updated.verified) await markListRowDone(client, channelId, messageTs, rowId, '💰');
     }
   } catch (err) {
     console.error('ar_paid_submit error:', err);
@@ -522,7 +526,9 @@ boltApp.view('ar_due_submit', async ({ ack, body, view, client }) => {
   await ack();
   try {
     const updated = await updateDueDate(rowId, newDueDate, body.user.username);
-    const msg = `📅 *${updated.client}* · \`${updated.invoiceNo}\` — due date moved ${updated.previousDueDate || '—'} → ${newDueDate} by <@${body.user.id}>. Bot will resume chasing after that date.`;
+    const msg = updated.verified
+      ? `📅 *${updated.client}* · \`${updated.invoiceNo}\` — due date moved ${updated.previousDueDate || '—'} → ${newDueDate} by <@${body.user.id}>. Bot will resume chasing after that date.`
+      : `⚠️ *${updated.client}* — wrote new due date ${newDueDate} to FP&A but the tool didn't persist it on read-back. Please double-check.`;
     if (channelId && messageTs) {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
     }
