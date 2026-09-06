@@ -736,9 +736,9 @@ if (AR_ENABLE_CRON === 'true' && AR_CRON_CHANNEL_ID) {
     { timezone: AR_CRON_TIMEZONE }
   );
 
-  // Daily at 9am IST: post send-to-client sweep (Q1 for invoices reaching invoiceDate, Q2 daily re-nudge)
+  // Daily at 11am IST: post send-to-client sweep (Q1 for invoices reaching invoiceDate, Q2 daily re-nudge)
   cron.schedule(
-    '0 9 * * *',
+    '0 11 * * *',
     async () => {
       try {
         console.log('[cron] daily send-sweep');
