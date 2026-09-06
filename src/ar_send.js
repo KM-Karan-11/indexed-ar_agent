@@ -72,13 +72,15 @@ export async function getSendSweep(now = new Date()) {
   for (const r of ar_fcst) {
     if (!r.invoiceNo) continue;
     if (!r.invoiceDate) continue;
-    if (r.invoiceDate > today) continue; // date hasn't arrived
     if (r.status === 'Paid') continue;
 
     const state = states.get(String(r.id));
 
+    // Q1 fires only on the exact invoice date and only if we've never asked before.
+    // Anything back-dated is treated as historical and silently skipped —
+    // no auto-catchup, no noise.
     if (!state) {
-      q1.push(r);
+      if (r.invoiceDate === today) q1.push(r);
       continue;
     }
     if (state.send_confirmed === 'not_required') continue;
