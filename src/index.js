@@ -358,18 +358,34 @@ boltApp.action('ar_mark_raised', async ({ ack, body, client }) => {
     }
     const rowId = body.actions[0].value;
     const drafts = await getDraftsForMonth(currentInvoiceMonth());
-    const target = drafts.find((d) => String(d.id) === String(rowId));
+    let target = drafts.find((d) => String(d.id) === String(rowId));
+    let existing = {};
     if (!target) {
-      await client.chat.postEphemeral({
-        channel: body.channel.id,
-        user: body.user.id,
-        text: 'That invoice was already updated or is no longer a draft.',
-      });
-      return;
+      // Not a draft anymore — fall back to the live row so the user can
+      // still correct the invoice number. Refuse only if it's already Paid.
+      const row = await getArRow(rowId);
+      if (!row) {
+        await client.chat.postEphemeral({
+          channel: body.channel.id,
+          user: body.user.id,
+          text: 'That invoice row no longer exists in FP&A.',
+        });
+        return;
+      }
+      if (row.status === 'Paid') {
+        await client.chat.postEphemeral({
+          channel: body.channel.id,
+          user: body.user.id,
+          text: `That invoice is already marked Paid (${row.invoiceNo}). Edit it directly in FP&A if needed.`,
+        });
+        return;
+      }
+      target = row;
+      existing = { invoiceNo: row.invoiceNo, invoiceDate: row.invoiceDate };
     }
     await client.views.open({
       trigger_id: body.trigger_id,
-      view: raisedModal(rowId, target.client, target.invoiceMonth, body.channel.id, body.message.ts),
+      view: raisedModal(rowId, target.client, target.invoiceMonth, body.channel.id, body.message.ts, existing),
     });
   } catch (err) {
     console.error('ar_mark_raised error:', err);
@@ -402,12 +418,17 @@ boltApp.view('ar_raised_submit', async ({ ack, body, view, client }) => {
   await ack();
   try {
     const updated = await markRaised(rowId, invoiceNo, invoiceDate, body.user.username);
+    const action = updated.isCorrection ? 'invoice # updated' : 'marked raised';
     const msg = updated.verified
-      ? `✅ *${updated.client}* marked raised: \`${invoiceNo}\` (${invoiceDate || 'today'}) — by <@${body.user.id}>`
+      ? `✅ *${updated.client}* ${action}: \`${invoiceNo}\` (${invoiceDate || 'today'}) — by <@${body.user.id}>`
       : `⚠️ *${updated.client}* — wrote \`${invoiceNo}\` to FP&A but the tool didn't persist the change on read-back. Please double-check the row manually.`;
     if (channelId && messageTs) {
       await client.chat.postMessage({ channel: channelId, thread_ts: messageTs, text: msg });
-      if (updated.verified) await markListRowDone(client, channelId, messageTs, rowId, '✅');
+      // Only strike the row out if this was a fresh raise. For corrections the
+      // row's already struck through (or on a different message entirely).
+      if (updated.verified && !updated.isCorrection) {
+        await markListRowDone(client, channelId, messageTs, rowId, '✅');
+      }
     }
   } catch (err) {
     console.error('ar_raised_submit error:', err);

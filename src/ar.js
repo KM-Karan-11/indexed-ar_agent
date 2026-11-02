@@ -71,15 +71,20 @@ export async function markRaised(rowId, invoiceNo, invoiceDate, actorEmail) {
   const target = ar.find((r) => String(r.id) === String(rowId));
   if (!target) throw new Error(`AR row ${rowId} not found`);
 
+  // Correction (row already has invoiceNo): only touch invoiceNo + invoiceDate,
+  // leave paymentDate and status alone so a mid-cycle fix doesn't wipe them.
+  const isCorrection = !!target.invoiceNo;
   const updated = ar.map((r) =>
     String(r.id) === String(rowId)
-      ? {
-          ...r,
-          invoiceNo,
-          invoiceDate: invoiceDate || r.invoiceDate,
-          paymentDate: '',
-          status: 'Invoiced',
-        }
+      ? isCorrection
+        ? { ...r, invoiceNo, invoiceDate: invoiceDate || r.invoiceDate }
+        : {
+            ...r,
+            invoiceNo,
+            invoiceDate: invoiceDate || r.invoiceDate,
+            paymentDate: '',
+            status: 'Invoiced',
+          }
       : r
   );
 
@@ -92,11 +97,12 @@ export async function markRaised(rowId, invoiceNo, invoiceDate, actorEmail) {
 
   const verifyRow = await fetchForecastRow();
   const after = (verifyRow.ar_fcst || []).find((r) => String(r.id) === String(rowId));
-  const verified = !!(after && after.invoiceNo === invoiceNo && after.status === 'Invoiced');
+  const expectedStatus = isCorrection ? target.status : 'Invoiced';
+  const verified = !!(after && after.invoiceNo === invoiceNo && after.status === expectedStatus);
   console.log(
-    `[write] markRaised id=${rowId} actor=${actorEmail} before=${JSON.stringify({ invoiceNo: target.invoiceNo, status: target.status, paymentDate: target.paymentDate })} after=${JSON.stringify({ invoiceNo: after?.invoiceNo, status: after?.status, paymentDate: after?.paymentDate })} verified=${verified}`
+    `[write] markRaised id=${rowId} actor=${actorEmail} correction=${isCorrection} before=${JSON.stringify({ invoiceNo: target.invoiceNo, status: target.status, paymentDate: target.paymentDate })} after=${JSON.stringify({ invoiceNo: after?.invoiceNo, status: after?.status, paymentDate: after?.paymentDate })} verified=${verified}`
   );
-  return { ...target, invoiceNo, invoiceDate: invoiceDate || target.invoiceDate, status: 'Invoiced', verified };
+  return { ...target, invoiceNo, invoiceDate: invoiceDate || target.invoiceDate, status: expectedStatus, isCorrection, verified };
 }
 
 export async function updateDueDate(rowId, newDueDate, actorEmail) {
@@ -263,28 +269,36 @@ export function formatPaymentNudgeBlocks(rows, opts = {}) {
   return blocks;
 }
 
-export function raisedModal(rowId, client, invoiceMonth, channelId, messageTs) {
+export function raisedModal(rowId, client, invoiceMonth, channelId, messageTs, existing = {}) {
+  const { invoiceNo: existingInvoiceNo, invoiceDate: existingInvoiceDate } = existing;
+  const invoiceNoInput = {
+    type: 'plain_text_input',
+    action_id: 'value',
+    placeholder: { type: 'plain_text', text: 'e.g. INV-01-09/2026' },
+  };
+  if (existingInvoiceNo) invoiceNoInput.initial_value = existingInvoiceNo;
+
+  const header = existingInvoiceNo
+    ? `*${client}* · ${invoiceMonth}\nAlready raised as \`${existingInvoiceNo}\`. Edit the invoice number if you need to correct it.`
+    : `*${client}* · ${invoiceMonth}\nEnter the invoice number as it appears in Xero.`;
+
   return {
     type: 'modal',
     callback_id: 'ar_raised_submit',
     private_metadata: JSON.stringify({ rowId, channelId, messageTs }),
-    title: { type: 'plain_text', text: 'Mark invoice raised' },
+    title: { type: 'plain_text', text: existingInvoiceNo ? 'Edit invoice number' : 'Mark invoice raised' },
     submit: { type: 'plain_text', text: 'Save' },
     close: { type: 'plain_text', text: 'Cancel' },
     blocks: [
       {
         type: 'section',
-        text: { type: 'mrkdwn', text: `*${client}* · ${invoiceMonth}\nEnter the invoice number as it appears in Xero.` },
+        text: { type: 'mrkdwn', text: header },
       },
       {
         type: 'input',
         block_id: 'invoice_no',
         label: { type: 'plain_text', text: 'Invoice #' },
-        element: {
-          type: 'plain_text_input',
-          action_id: 'value',
-          placeholder: { type: 'plain_text', text: 'e.g. INV-01-09/2026' },
-        },
+        element: invoiceNoInput,
       },
       {
         type: 'input',
@@ -294,7 +308,7 @@ export function raisedModal(rowId, client, invoiceMonth, channelId, messageTs) {
         element: {
           type: 'datepicker',
           action_id: 'value',
-          initial_date: new Date().toISOString().slice(0, 10),
+          initial_date: (existingInvoiceDate && existingInvoiceDate.slice(0, 10)) || new Date().toISOString().slice(0, 10),
         },
       },
     ],
